@@ -100,6 +100,8 @@ type Conn struct {
 	activeCall int32
 
 	tmp [16]byte
+
+	alertCount int
 }
 
 // Access to net.Conn methods.
@@ -657,6 +659,11 @@ Again:
 		return c.in.setErrorLocked(err)
 	}
 
+	if typ != recordTypeAlert && len(data) > 0 {
+		// this is a valid non-alert message: reset the count of alerts
+		c.alertCount = 0
+	}
+
 	switch typ {
 	default:
 		c.in.setErrorLocked(c.sendAlert(alertUnexpectedMessage))
@@ -674,6 +681,13 @@ Again:
 		case alertLevelWarning:
 			// drop on the floor
 			c.in.freeBlock(b)
+
+			c.alertCount++
+			if c.alertCount > maxWarnAlertCount {
+				c.sendAlert(alertUnexpectedMessage)
+				return c.in.setErrorLocked(errors.New("tls: too many warn alerts"))
+			}
+
 			goto Again
 		case alertLevelError:
 			c.in.setErrorLocked(&net.OpError{Op: "remote error", Err: alert(data[1])})
